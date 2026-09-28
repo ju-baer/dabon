@@ -393,13 +393,4 @@ def main(args):
     logger.info("Thrust I complete. Results in %s", output_dir)
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--tasks", nargs="+",
-                        default=["gsm8k", "arena_hard"])
-    parser.add_argument("--model", default="meta-llama/Llama-3.1-8B-Instruct")
-    parser.add_argument("--n_prompts", type=int, default=500)
-    parser.add_argument("--output_dir", default="results/thrust1")
-    parser.add_argument("--device", default="cuda")
-    args = parser.parse_args()
-    main(args)
+
