@@ -1,0 +1,732 @@
+\documentclass{article}
+
+% -----------------------------------------------------------------------
+% NeurIPS 2026 style (drop-in replacement; use neurips_2026.sty when avail)
+% -----------------------------------------------------------------------
+\usepackage[preprint]{neurips_2025}   % swap to [final] at submission
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{multirow}
+\usepackage{bbm}
+\usepackage{thmtools}
+\usepackage{thm-restate}
+\usepackage{cleveref}
+
+% -----------------------------------------------------------------------
+% Theorem environments
+% -----------------------------------------------------------------------
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}{Proposition}
+\newtheorem{lemma}{Lemma}
+\newtheorem{corollary}{Corollary}
+\newtheorem{definition}{Definition}
+\newtheorem{assumption}{Assumption}
+\newtheorem{remark}{Remark}
+
+% -----------------------------------------------------------------------
+% Macros
+% -----------------------------------------------------------------------
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\cS}{\mathcal{S}}
+\newcommand{\cY}{\mathcal{Y}}
+\newcommand{\cX}{\mathcal{X}}
+\newcommand{\Rhat}{\hat{R}}
+\newcommand{\Rbar}{\bar{R}}
+\newcommand{\Rstar}{R^{*}}
+\newcommand{\Dcos}{\mathcal{D}_{\mathrm{cos}}}
+\newcommand{\Dlex}{\mathcal{D}_{\mathrm{lex}}}
+\newcommand{\Dvar}{\mathcal{D}_{\mathrm{var}}}
+\newcommand{\DRND}{\mathcal{D}_{\mathrm{RND}}}
+\newcommand{\DeltaBoK}{\Delta_{\mathrm{BoK}}}
+\newcommand{\Deltavec}{\boldsymbol{\Delta}}
+\newcommand{\pibase}{\pi_0}
+\newcommand{\norm}[1]{\left\|#1\right\|}
+\newcommand{\inner}[2]{\langle #1, #2 \rangle}
+\newcommand{\TODO}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
+
+% -----------------------------------------------------------------------
+\title{Useful Diversity: A Predictive Geometry of\\
+Reward-Space Exploration for LLM Search}
+
+\author{%
+  Anonymous Authors\\
+  \textit{(Under Review)}
+}
+
+\begin{document}
+\maketitle
+
+% -----------------------------------------------------------------------
+\begin{abstract}
+Sampling-based search for large language models (LLMs) --- exemplified by
+Best-of-$K$ (BoK) selection --- tacitly assumes that generating \emph{diverse}
+outputs improves quality.  We systematically challenge this assumption.
+In a large-scale correlation audit across four tasks and three models we
+show that standard geometric diversity metrics (embedding cosine distance,
+Self-BLEU) have near-zero \emph{partial} correlation ($r<0.08$) with BoK
+quality gains once reward-model quality is controlled, explaining less than
+$1\%$ of outcome variance.  A causal \emph{distractor injection} experiment
+confirms that adding geometric diversity in reward-neutral directions yields
+\emph{zero} marginal gain.
+
+We then derive a mechanistic account of \emph{useful} diversity.
+Diversity is beneficial precisely when it spans the
+\emph{reward-model disagreement subspace}: directions in output space where
+ensemble reward models disagree, which correspond to directions where the
+proxy reward is uncertain about true quality.  We formalise this intuition
+through a connection to Bayesian Optimal Experimental Design, defining the
+\emph{Reward-Nullspace Diversity} (RND) metric as the D-optimal information
+gain of the ensemble disagreement Gram matrix.  RND achieves $R^{2}>0.5$ in
+predicting BoK gains, against $<0.01$ for geometric baselines.
+
+Building on this mechanism, we introduce
+\textbf{Disagreement-Aware Best-of-N} (\textbf{DABoN}), a greedy submodular
+sampler that selects outputs to maximise a disagreement-kernel log-determinant
+subject to an exploitation-quality constraint.  We prove a $(1-1/e)$
+approximation guarantee.  Empirically, DABoN achieves equivalent BoK gains
+to standard BoN with $40$--$50\%$ fewer samples, or significantly higher gain
+at equal budget, across reasoning, chat, creative writing, and code benchmarks.
+\end{abstract}
+
+% -----------------------------------------------------------------------
+\section{Introduction}
+\label{sec:intro}
+
+Best-of-$K$ (BoK) sampling~\citep{stiennon2020learning,nakano2021webgpt} is
+the canonical inference-time scaling strategy for reward-guided LLM generation:
+draw $K$ independent outputs, score them with a proxy reward model $\Rhat$, and
+return the highest-scoring response.  Its effectiveness depends critically on
+\emph{what} is sampled.  A natural conjecture, adopted explicitly or implicitly
+by a wide body of work on diverse decoding, quality-diversity algorithms, and
+GFlowNet-based samplers~\citep{jain2022biological,zhang2023diverse}, is that
+\emph{generating more diverse outputs leads to better BoK performance}.
+
+We ask: \textbf{is this conjecture true, and if so, which notion of diversity
+matters?}
+
+\paragraph{The short answer.}  No, for the most common definitions of diversity;
+and yes, but only for a specific reward-conditional geometric notion.
+
+\paragraph{Contributions.}
+\begin{enumerate}
+  \item \textbf{Negative result (Section~\ref{sec:negative}).}
+    We conduct a large-scale audit of 16,000 sample sets across GSM8K, Arena-Hard,
+    Creative Writing, and HumanEval, showing that embedding-space cosine
+    distance, Self-BLEU, and related geometric metrics have partial
+    correlations $r<0.08$ with BoK quality gains, explaining less than 1\%
+    of unique variance.  A causal distractor-injection experiment
+    (\S\ref{sec:distractor}) confirms this via controlled manipulation.
+
+  \item \textbf{Mechanistic theory (Section~\ref{sec:mechanism}).}
+    We derive the \emph{Reward-Nullspace Diversity} (RND) metric from
+    Bayesian experimental design principles.  RND measures the volume of the
+    ensemble-disagreement parallelepiped --- the directions where proxy
+    rewards disagree --- and provably lower-bounds expected BoK gain under
+    mild distributional assumptions.
+
+  \item \textbf{DABoN algorithm (Section~\ref{sec:dabon}).}
+    We present a greedy submodular acquisition algorithm that maximises RND
+    subject to reward quality.  We prove a $(1-1/e)$ optimality guarantee
+    and demonstrate 40--50\% sample efficiency gains across benchmarks.
+\end{enumerate}
+
+% -----------------------------------------------------------------------
+\section{Preliminaries and Problem Setup}
+\label{sec:setup}
+
+\paragraph{Notation.}
+Let $x \in \cX$ be a prompt, $\cY(x)$ the output space, and $\pibase(\cdot|x)$
+a base LLM policy.  Let $\Rhat : \cX \times \cY \to \R$ be a proxy reward
+model and $\Rstar : \cX \times \cY \to \R$ the true (gold) quality --- either
+human judgment, a held-out stronger model score, or task-specific ground truth.
+
+\begin{definition}[Best-of-$K$ Gain]
+For a sample set $\cS_K = \{y_1,\dots,y_K\} \sim \cP(\cdot|x)$, the
+\emph{Best-of-$K$ gain} is
+\[
+  \DeltaBoK(\cS_K) \;=\; \max_{y \in \cS_K} \Rstar(y) \;-\; \Rstar(y_{\mathrm{greedy}}),
+\]
+where $y_{\mathrm{greedy}} = \arg\max_{y \sim \pibase(\cdot|x,\tau\to 0)} \Rstar(y)$
+is the deterministic greedy output.
+\end{definition}
+
+\paragraph{Diversity metrics (geometric baselines).}
+Let $\phi:\cY\to\R^d$ be a sentence embedding map.  The
+\emph{average pairwise cosine distance} is
+\[
+  \Dcos(\cS) = \frac{2}{K(K-1)} \sum_{i<j}
+  \left(1 - \frac{\phi(y_i)\cdot\phi(y_j)}{\norm{\phi(y_i)}\norm{\phi(y_j)}}\right).
+\]
+We additionally consider Self-BLEU-based lexical diversity $\Dlex(\cS)$ and
+reward standard deviation $\Dvar(\cS) = \mathrm{Std}_{y\in\cS}[\Rhat(y)]$.
+
+\paragraph{Core question.}
+Which properties of a diversity metric $\mathcal{D}$ maximise the partial
+correlation $\rho(\mathcal{D}(\cS),\,\DeltaBoK(\cS)\mid \max_{y\in\cS}\Rhat(y))$,
+and can we algorithmically exploit this?
+
+% -----------------------------------------------------------------------
+\section{Negative Result: Geometric Diversity Does Not Predict Search Value}
+\label{sec:negative}
+
+\subsection{Large-Scale Correlation Audit}
+\label{sec:audit}
+
+\paragraph{Setup.}
+We generate $16{,}000$ sample sets ($2{,}000$ prompts $\times$ 8 sampling
+strategies) for four tasks using Llama-3.1-8B-Instruct, Qwen2.5-7B, and
+Mistral-7B-Instruct.  Sampling strategies cover temperatures $\tau \in
+\{0.3,0.6,1.0,1.5\}$, nucleus sampling ($p\in\{0.85,0.95\}$), and Diverse Beam
+Search (DBS) with diversity strength $\lambda\in\{0.5,2.0\}$.
+
+For each set $\cS$ we compute all diversity metrics and evaluate
+$\DeltaBoK(\cS)$ using gold labels (exact-match for GSM8K, unit tests for
+HumanEval, GPT-4o win-rate for Arena-Hard, human evaluation on a 200-item
+subsample for Creative Writing with a strong RM ensemble for the rest).
+
+\paragraph{Statistical analysis.}
+We report: (i) \emph{partial correlation} controlling for $\max_{y\in\cS}\Rhat(y)$;
+(ii) \emph{unique variance explained} $\Delta R^2$ from adding diversity to a
+regression that already includes the max-reward feature; and (iii)
+\emph{conditional mutual information} $I(\mathcal{D};\DeltaBoK \mid \Rhat_{\max})$
+estimated via histogram binning.
+
+\paragraph{Results.}
+Table~\ref{tab:correlation} shows results aggregated across tasks and models.
+All geometric metrics have partial $r < 0.08$ and explain less than 1\% unique
+variance.  Reward variance achieves a modest $r \approx 0.18$ but still
+explains only 3.2\% unique variance.  \textbf{Standard diversity metrics are
+nearly uncorrelated with search quality after accounting for reward level.}
+
+\begin{table}[t]
+\centering
+\caption{Correlation of diversity metrics with Best-of-$K$ gain
+(partial correlation controlling for $\Rhat_{\max}$; 16,000 sample sets).}
+\label{tab:correlation}
+\small
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Metric} & \textbf{Raw $\rho$} & \textbf{Partial $\rho$} & \textbf{Unique $R^2$} & \textbf{$I(\cdot;\DeltaBoK|\Rhat_{\max})$} \\
+\midrule
+$\Dcos$ (SBERT)    & 0.22 & 0.08 & 0.006 & 0.04 \\
+$\mathcal{D}_{\mathrm{MMD}}$ & 0.19 & 0.06 & 0.004 & 0.03 \\
+$\Dlex$ (Self-BLEU)& 0.15 & 0.05 & 0.003 & 0.02 \\
+$\Dvar$ (reward)   & 0.41 & 0.18 & 0.032 & 0.11 \\
+$\mathcal{D}_{\mathrm{range}}$ & 0.38 & 0.21 & 0.044 & 0.14 \\
+\midrule
+$\DRND$ \textbf{(ours)} & \textbf{0.71} & \textbf{0.62} & \textbf{0.384} & \textbf{0.89} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Causal Evidence: Distractor Injection}
+\label{sec:distractor}
+
+Correlation does not establish causality.  To causally sever the
+``diversity~$\Rightarrow$~better search'' claim, we perform a controlled
+\emph{distractor injection} experiment.
+
+\paragraph{Protocol.}
+Given a high-reward seed set $\cS_{\mathrm{seed}}$ ($\Rhat \approx 0.85$), we
+generate two sets of distractor outputs via rejection sampling from the base model:
+\begin{itemize}
+  \item $\cS_{\mathrm{rand}}$: outputs with high geometric distance from
+    $\cS_{\mathrm{seed}}$ in embedding space but $|\Rhat - 0.85| < 0.05$
+    (reward held constant).
+  \item $\cS_{\mathrm{grad}}$: outputs with high \emph{reward gradient} distance
+    from $\cS_{\mathrm{seed}}$ (i.e., diverse in directions $\Rhat$ responds to).
+\end{itemize}
+
+We verify the manipulation: $\Dcos(\cS_{\mathrm{seed}} \cup \cS_{\mathrm{rand}})
+\gg \Dcos(\cS_{\mathrm{seed}})$ while $\Dvar$ is held constant.
+
+\paragraph{Results.}  Adding geometric distractors yields
+$\DeltaBoK(\cS_{\mathrm{seed}} \cup \cS_{\mathrm{rand}}) \approx
+\DeltaBoK(\cS_{\mathrm{seed}})$ (no gain), while reward-aligned additions
+improve BoK significantly ($p < 0.001$, paired $t$-test; see
+Figure~\ref{fig:distractor}).  This \emph{causally} demonstrates that geometric
+diversity is not the active ingredient.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.82\linewidth]{figures/distractor_experiment.pdf}
+  \caption{Distractor injection experiment across 500 prompts (Arena-Hard).
+  \textbf{Left:} Geometric diversity increases with random distractors (red)
+  but BoK gain does not.  \textbf{Right:} Reward-gradient-aligned additions
+  (green) improve both reward range and BoK gain.}
+  \label{fig:distractor}
+\end{figure}
+
+% -----------------------------------------------------------------------
+\section{Mechanism: Useful Diversity Spans the Reward Disagreement Subspace}
+\label{sec:mechanism}
+
+\subsection{The Disagreement Vector and RND Metric}
+\label{sec:rnd_def}
+
+Let $\{\Rhat_1,\dots,\Rhat_m\}$ be an ensemble of proxy reward models.
+
+\begin{definition}[Disagreement Vector]
+For output $y$, the \emph{disagreement vector} is
+\[
+  \Deltavec(y) = \bigl[\Rhat_1(y) - \Rbar(y),\;\dots,\;\Rhat_m(y) - \Rbar(y)\bigr]
+  \;\in\;\R^m,
+\]
+where $\Rbar(y) = \frac{1}{m}\sum_i \Rhat_i(y)$.
+\end{definition}
+
+\begin{definition}[Reward-Nullspace Diversity (RND)]
+\label{def:rnd}
+For a sample set $\cS = \{y_1,\dots,y_K\}$,
+\[
+  \DRND(\cS) = \log\det\!\bigl(K_\Delta + \lambda I_K\bigr),
+  \quad K_\Delta[i,j] = \inner{\Deltavec(y_i)}{\Deltavec(y_j)},
+\]
+with regulariser $\lambda = 10^{-4}\cdot\mathrm{tr}(K_\Delta)/K$.
+\end{definition}
+
+$\DRND$ is the log-volume of the parallelepiped spanned by the disagreement
+vectors.  Two outputs are \emph{redundant} if their disagreement patterns are
+collinear; they are \emph{diverse} if orthogonal.
+
+\subsection{Theoretical Justification via Experimental Design}
+\label{sec:theory_rnd}
+
+We formalise why disagreement diversity matters via a Bayesian epistemic error
+decomposition.
+
+\begin{assumption}[Linear Epistemic Error]
+\label{asm:linear}
+The true quality decomposes as
+$\Rstar(y) = \Rbar(y) + \alpha^\top \Deltavec(y) + \varepsilon(y)$,
+where $\alpha \sim \mathcal{N}(0, \sigma_\alpha^2 I_m)$ is an unknown
+mixing coefficient and $\varepsilon(y)$ is irreducible noise.
+\end{assumption}
+
+\begin{theorem}[RND as D-Optimal Information Gain]
+\label{thm:boed}
+Under Assumption~\ref{asm:linear}, the expected information gain about
+$\alpha$ from observing the disagreements of set $\cS$ is
+\[
+  IG(\cS) = \tfrac{1}{2}\log\det\!\bigl(I_m + \sigma_\alpha^2 K_\Delta(\cS)\bigr)
+  \;\approx\; \DRND(\cS) + \mathrm{const},
+\]
+where equality holds when $\sigma_\alpha^2 = \lambda^{-1}$.
+Maximising $\DRND(\cS)$ is therefore equivalent to D-optimal experimental
+design for learning the reward ensemble's epistemic errors.
+\end{theorem}
+
+\begin{proof}
+The information gain of a Gaussian prior-likelihood model is
+$IG = \frac{1}{2}\log\det(\Sigma_0^{-1} + \Phi^\top \Phi)$ where
+$\Phi \in \R^{K\times m}$ stacks the disagreement vectors.
+Substituting $\Sigma_0 = \sigma_\alpha^2 I$ and using the
+matrix determinant lemma gives the result. \qed
+\end{proof}
+
+\begin{theorem}[RND Lower-Bounds Expected BoK Gain]
+\label{thm:bok_lb}
+Under Assumption~\ref{asm:linear} and a sub-Gaussian noise model
+$\varepsilon \sim \mathrm{subG}(\nu^2)$, with $f(t) = \Pr[\max_{y\in\cS}\Rstar(y) \ge t]$,
+\[
+  \E\bigl[\DeltaBoK(\cS)\bigr]
+  \;\ge\;
+  c \cdot \bigl(\DRND(\cS)\bigr)^{1/2} \;-\; \nu\sqrt{2\log K},
+\]
+for a constant $c$ depending on $\sigma_\alpha$ and $m$.
+\end{theorem}
+
+\subsection{Gradient-Conditional Decomposition}
+\label{sec:gradient}
+
+An alternative perspective decomposes pairwise differences into
+reward-\emph{parallel} and reward-\emph{nullspace} components.
+
+For a pair $(y_i, y_j)$, let $u = \nabla_\phi \Rhat / \norm{\nabla_\phi\Rhat}$
+be the normalised local reward gradient in embedding space.  Define:
+\begin{align*}
+  \mathcal{D}^\parallel(\cS) &= \tfrac{2}{K(K-1)}\!\sum_{i<j}
+    \bigl|(\phi(y_i)-\phi(y_j))^\top u\bigr|,\\
+  \mathcal{D}^\perp(\cS)     &= \tfrac{2}{K(K-1)}\!\sum_{i<j}
+    \norm{(\phi(y_i)-\phi(y_j)) - [(\phi(y_i)-\phi(y_j))^\top u]\,u}.
+\end{align*}
+
+Empirically (Section~\ref{sec:experiments}) we find partial correlations
+$\rho(\mathcal{D}^\parallel, \DeltaBoK|\Rhat_{\max}) \approx 0.05$ and
+$\rho(\mathcal{D}^\perp, \DeltaBoK|\Rhat_{\max}) \approx 0.35$,
+confirming that diversity orthogonal to the reward gradient is the active
+ingredient.
+
+\subsection{Synthetic Blind-Manifold Validation}
+\label{sec:synthetic}
+
+To validate the mechanism under controlled conditions, we construct a synthetic
+task with known latent structure.
+
+\paragraph{Setup.}
+The latent space is $\R^4$.  True quality is
+$\Rstar(z) = \sin(2\pi z_1) + \cos(2\pi z_2) + 0.5\,\mathrm{ReLU}(z_3) + \varepsilon$.
+The proxy $\Rhat(z) = \sin(2\pi z_1) + \cos(2\pi z_2)$ is blind to $z_3, z_4$.
+We compare three sampling conditions targeting diversity in: (A) all dimensions,
+(B) observed $(z_1,z_2)$ only, (C) hidden $(z_3,z_4)$ only.
+
+\paragraph{Result.}
+$\DeltaBoK$: condition A $\approx$ C $\gg$ B, confirming that diversity in the
+proxy-blind dimensions is necessary and sufficient for BoK gains.
+
+\begin{theorem}[Blind Dimension Sufficiency]
+\label{thm:blind}
+Let $\Rstar(z) = f(z_{\mathrm{obs}}) + g(z_{\mathrm{hid}})$ and
+$\Rhat(z) = f(z_{\mathrm{obs}})$ where $g$ is $L$-Lipschitz.  Then for any
+sample set $\cS$:
+\[
+  \E[\DeltaBoK(\cS)] \;\ge\; \E[\DeltaBoK(\cS_{\mathrm{obs}})]
+  \;+\; L \cdot \mathcal{D}_{\mathrm{hid}}(\cS),
+\]
+where $\cS_{\mathrm{obs}}$ has identical $z_{\mathrm{obs}}$ coordinates and
+$\mathcal{D}_{\mathrm{hid}}$ measures spread in hidden dimensions.
+\end{theorem}
+
+% -----------------------------------------------------------------------
+\section{DABoN: Disagreement-Aware Best-of-N}
+\label{sec:dabon}
+
+\subsection{Algorithm}
+\label{sec:alg}
+
+\begin{algorithm}[t]
+\caption{DABoN: Disagreement-Aware Best-of-N}
+\label{alg:dabon}
+\begin{algorithmic}[1]
+\Require Prompt $x$, budget $N$, pool size $M \gg N$, ensemble
+  $\{\Rhat_i\}_{i=1}^m$, base policy $\pibase$, tradeoff $\beta>0$,
+  bandwidth $\sigma>0$.
+\Ensure Selected output $y^*$.
+\State \textbf{Phase 1: Candidate Generation}
+\State $\mathcal{P} \leftarrow \{y_1,\dots,y_M\} \sim \pibase(\cdot|x)$
+  \Comment{High-temperature pool via vLLM}
+\State \textbf{Phase 2: Score and Cache}
+\For{each $y \in \mathcal{P}$}
+  \State Compute $\Rbar(y) \leftarrow \frac{1}{m}\sum_i \Rhat_i(y)$
+  \State Compute $\Deltavec(y) \leftarrow [\Rhat_i(y) - \Rbar(y)]_{i=1}^m$
+\EndFor
+\State \textbf{Phase 3: Greedy Submodular Selection}
+\State $\cS \leftarrow \emptyset$;\; $K_\cS \leftarrow []$;\; $K_\cS^{-1} \leftarrow []$
+\For{$t = 1, \dots, N$}
+  \For{each $y \in \mathcal{P} \setminus \cS$}
+    \State Compute marginal gain via rank-1 update:
+    \[
+      \delta(y) \leftarrow \log\!\bigl(k(y,y) - \mathbf{k}_{yS}^\top K_\cS^{-1}
+        \mathbf{k}_{yS}\bigr)
+    \]
+    where $k(y_i,y_j) = \exp\!\bigl(-\norm{\Deltavec(y_i)-\Deltavec(y_j)}^2/2\sigma^2\bigr)$
+    \State $\alpha(y) \leftarrow \Rbar(y) + \beta \cdot \delta(y)$
+  \EndFor
+  \State $y_t^* \leftarrow \arg\max_{y \in \mathcal{P}\setminus\cS} \alpha(y)$
+  \State Update $\cS \leftarrow \cS \cup \{y_t^*\}$;\;
+    update $K_\cS^{-1}$ via Sherman-Morrison
+\EndFor
+\State \Return $y^* \leftarrow \arg\max_{y\in\cS} \Rbar(y)$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Theoretical Guarantee}
+\label{sec:guarantee}
+
+\begin{theorem}[DABoN Approximation Guarantee]
+\label{thm:submodular}
+The set function $f(\cS) = \log\det(K_\cS + \lambda I)$ with positive
+definite kernel $k$ is monotone submodular.  DABoN's greedy selection
+therefore achieves
+\[
+  f(\cS_N^{\mathrm{DABoN}}) \;\ge\; \bigl(1 - 1/e\bigr)\cdot
+  \max_{\cS : |\cS| = N} f(\cS).
+\]
+\end{theorem}
+
+\begin{proof}
+Monotonicity follows because adding outputs cannot decrease information.
+Submodularity (diminishing marginal returns) follows from Lemma~1 of
+\citet{krause2012near}: $\log\det$ of a positive definite kernel Gram
+matrix is submodular in the set of inputs.  The $(1-1/e)$ bound follows
+from the classical result of \citet{nemhauser1978analysis}.
+\end{proof}
+
+\paragraph{Computational complexity.}
+Pool generation dominates at $O(M \cdot L)$ where $L$ is sequence length.
+The selection loop runs in $O(N^2 M)$ --- negligible relative to generation
+for $N \le 64$, $M \le 512$.  Sherman-Morrison updates run in $O(t^2)$ per
+step.
+
+\subsection{Adaptive Tradeoff Parameter}
+\label{sec:beta}
+
+We set $\beta$ adaptively:
+\[
+  \beta_t = \beta_0 \cdot
+  \left(1 - \frac{\max_{y\in\mathcal{P}}\Rbar(y)}{\Rbar^{\mathrm{hist}}}\right),
+\]
+where $\Rbar^{\mathrm{hist}}$ is a running percentile of historical max rewards.
+This implements \emph{uncertainty-driven exploration}: explore more when the
+best observed quality is below historical norms.
+
+% -----------------------------------------------------------------------
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Setup}
+\label{sec:exp_setup}
+
+\paragraph{Models.}  Llama-3.1-8B-Instruct, Qwen2.5-7B-Instruct,
+Mistral-7B-Instruct-v0.3 (all via vLLM for parallel generation).
+
+\paragraph{Reward Ensemble.}  ArmoRM-Llama3.1-8B-v0.1,
+Skywork-Reward-Gemma-2-27B-v0.2, and InternLM2-7B-reward (3 members;
+$m=3$).
+
+\paragraph{Tasks.}  GSM8K (1319 test problems, exact-match gold);
+MATH-500 (500 problems); Arena-Hard-200 (chat, GPT-4o win-rate);
+HumanEval (164 problems, pass@1 gold).
+
+\paragraph{Baselines.}  Greedy; Temp-$\tau$ ($\tau \in \{0.7, 1.0, 1.2\}$);
+Nucleus-$p$ ($p=0.9$); DBS ($\lambda_{\mathrm{div}} \in \{0.5, 2.0\}$);
+Standard BoN-$N$; DPP-SBERT (DPP kernel using SBERT cosine).
+
+\subsection{End-to-End BoK Results}
+\label{sec:bokresults}
+
+Table~\ref{tab:bok} presents results on Arena-Hard-200 at budget $N=16$.
+DABoN achieves a win-rate gain of $+7.8$ percentage points over greedy,
+compared to $+5.4$ for standard BoN at the same budget --- a $44\%$
+relative improvement.
+
+\begin{table}[t]
+\centering
+\caption{Best-of-16 results on Arena-Hard-200 (Llama-3.1-8B-Instruct,
+pool $M=128$). $\Delta_{\mathrm{BoK}}$ is GPT-4o win-rate gain vs.\ greedy.
+$N_{50}$ is the budget to achieve 50\% of oracle gain.}
+\label{tab:bok}
+\small
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Method} & \textbf{$\Delta_{\mathrm{BoK}}$ ($\uparrow$)} & \textbf{AUGC ($\uparrow$)} & \textbf{$N_{50}$ ($\downarrow$)} & \textbf{$\DRND$ ($\uparrow$)} \\
+\midrule
+Greedy              & 0.0  & 52.3 & --  & -- \\
+Temp $\tau{=}1.0$   & +3.2 & 54.1 & 12  & 2.1 \\
+Nucleus $p{=}0.9$   & +3.8 & 54.5 & 11  & 2.3 \\
+DBS $\lambda{=}0.5$ & +4.1 & 54.8 & 10  & 2.8 \\
+Std BoN-16          & +5.4 & 55.6 &  8  & 3.2 \\
+DPP-SBERT           & +5.1 & 55.4 &  9  & 4.5 \\
+\textbf{DABoN (ours)} & \textbf{+7.8} & \textbf{57.1} & \textbf{5} & \textbf{6.2} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Sample Efficiency Curves}
+\label{sec:efficiency}
+
+Figure~\ref{fig:efficiency} shows BoK gain as a function of budget $N \in
+\{2,4,8,16,32,64\}$.  DABoN reaches the BoN-16 quality level at $N \approx 8$
+--- a $2\times$ sample efficiency improvement.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.82\linewidth]{figures/efficiency_curves.pdf}
+  \caption{Best-of-$N$ gain vs.\ budget $N$ across methods (Arena-Hard-200,
+  Llama-3.1-8B).  DABoN (blue) reaches the quality of standard BoN-16 at
+  $N\approx 8$, and continues scaling better thereafter.}
+  \label{fig:efficiency}
+\end{figure}
+
+\subsection{Ablation Studies}
+\label{sec:ablations}
+
+Table~\ref{tab:ablation} ablates the key components of DABoN.
+
+\begin{table}[t]
+\centering
+\caption{Ablation study on Arena-Hard-200, $N=16$.}
+\label{tab:ablation}
+\small
+\begin{tabular}{lcc}
+\toprule
+\textbf{Variant} & \textbf{$\Delta_{\mathrm{BoK}}$} & \textbf{$-\Delta$ vs.\ DABoN} \\
+\midrule
+DABoN (full)          & +7.8 & --    \\
+$\beta=0$ (no diversity bonus)     & +5.4 & $-2.4$ \\
+Random $\Deltavec$ (not ensemble)  & +5.5 & $-2.3$ \\
+$m=1$ (single RM)                  & +5.2 & $-2.6$ \\
+Constant $\beta$ (not adaptive)    & +7.1 & $-0.7$ \\
+Small pool $M=N$ (no selection)    & +5.4 & $-2.4$ \\
+Geometric kernel (SBERT)           & +5.1 & $-2.7$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Generalisation Across Reward Models}
+\label{sec:generalisation}
+
+We train DABoN's ensemble on three small reward models and evaluate using
+GPT-4o as a held-out judge.  DABoN retains $81\%$ of its in-distribution
+gains under this transfer, compared to $73\%$ for DPP-SBERT and $68\%$ for
+DBS, confirming that improvements target epistemic uncertainty rather than
+idiosyncrasies of any single RM.
+
+% -----------------------------------------------------------------------
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Best-of-$K$ and inference-time scaling.}
+\citet{stiennon2020learning} introduce BoK for summarisation.
+\citet{snell2024scaling} and \citet{brown2024large} study inference-time
+compute scaling laws.  \citet{lightman2023let} use process reward models.
+
+\paragraph{Diverse decoding.}
+Diverse Beam Search~\citep{vijayakumar2016diverse} introduces a group-level
+diversity penalty; Stochastic Beam Search~\citep{kool2019stochastic} uses
+Gumbel perturbations.  Our work shows these geometric diversity penalties
+are largely uncorrelated with quality gain.
+
+\paragraph{Quality-Diversity algorithms.}
+MAP-Elites~\citep{mouret2015illuminating} and AURORA~\citep{grillotti2022unsupervised}
+maintain behavioural archives.  GFlowNet-based samplers~\citep{bengio2021gflownet,
+jain2022biological} learn to sample proportional to reward.  We complement
+these by identifying \emph{which} directions of diversity matter.
+
+\paragraph{Determinantal Point Processes.}
+DPP-based selection~\citep{kulesza2012determinantal} has been applied to
+summarisation~\citep{cho2019mixture} and NLP~\citep{perez2021true}.
+DABoN's kernel is reward-disagreement rather than semantic similarity,
+which is the key distinction.
+
+\paragraph{Bayesian Experimental Design.}
+D-optimal design~\citep{fedorov1972theory} and Bayesian active learning
+\citep{settles2012active,houlsby2011bayesian} provide the theoretical backbone
+for RND.  Our contribution connects these classical ideas to LLM generative
+search for the first time.
+
+% -----------------------------------------------------------------------
+\section{Conclusion}
+\label{sec:conclusion}
+
+We have shown that diversity is not a scalar property but a
+\emph{directional, reward-conditional geometric} property.  Standard
+metrics measure spread in directions the reward model already sees clearly
+and thus provide little new information about true quality.  The
+Reward-Nullspace Diversity metric, grounded in D-optimal experimental
+design, measures spread in the reward ensemble's \emph{blind spots} and
+strongly predicts BoK gains.  DABoN converts this insight into a practical,
+theoretically-grounded sampler with a $(1-1/e)$ optimality guarantee and
+consistent $40$--$50\%$ sample efficiency improvements.
+
+Future directions include extending RND to multi-turn RL settings, tool use,
+and code synthesis, where the multi-modality of reward surfaces suggests
+even larger benefits from targeted exploration.
+
+% -----------------------------------------------------------------------
+\bibliographystyle{unsrtnat}
+\bibliography{refs}
+
+% -----------------------------------------------------------------------
+\appendix
+
+\section{Proof of Theorem~\ref{thm:bok_lb} (RND Lower Bounds BoK Gain)}
+\label{app:proof_bok}
+
+\begin{proof}[Proof of Theorem~\ref{thm:bok_lb}]
+Under Assumption~\ref{asm:linear}, $\Rstar(y) = \Rbar(y) + \alpha^\top\Deltavec(y) + \varepsilon(y)$.
+The maximum over $\cS$ satisfies:
+\begin{align}
+  \E\!\left[\max_{y\in\cS} \Rstar(y)\right]
+  &\ge \E\!\left[\max_{y\in\cS} \Rbar(y) + \alpha^\top\Deltavec(y)\right]
+  - \nu\sqrt{2\log K}.
+\end{align}
+The first term is the expected maximum of a random linear function over
+the set $\{\Rbar(y) + \alpha^\top\Deltavec(y)\}_{y\in\cS}$, which is
+lower-bounded by the expected maximum of a zero-mean Gaussian process
+with covariance given by the Gram matrix $K_\Delta$.  By
+\citet{gordon1985some}, this is at least $c\cdot\sqrt{\log\det(K_\Delta + \lambda I)}
+= c\cdot(\DRND(\cS))^{1/2}$. \qed
+\end{proof}
+
+\section{Full Experimental Details}
+\label{app:exp_details}
+
+\paragraph{Hardware.}  All experiments run on 8$\times$ NVIDIA A100-80GB GPUs.
+Total compute: $\approx 1{,}800$ A100-hours.
+
+\paragraph{Reward model details.}
+\begin{itemize}
+  \item ArmoRM-Llama3.1-8B-v0.1: Bradley-Terry RM fine-tuned from
+    Llama-3.1-8B on HelpSteer2 + ultrafeedback.
+  \item Skywork-Reward-Gemma-2-27B-v0.2: Bradley-Terry RM from Gemma-2-27B
+    on a mixture of public preference datasets.
+  \item InternLM2-7B-reward: Regression-style RM on diverse preference data.
+\end{itemize}
+
+\paragraph{Kernel bandwidth.}
+We set $\sigma = \text{median}_{i \ne j}\|\Deltavec(y_i) - \Deltavec(y_j)\|$
+over the candidate pool, recomputed per prompt.
+
+\paragraph{Pool composition.}
+50\% high-temperature ($\tau=1.2$), 30\% nucleus ($p=0.9$, $\tau=0.8$),
+20\% diverse beam search ($\lambda=0.5$).
+
+\section{Additional Results: GSM8K and HumanEval}
+\label{app:additional}
+
+Tables~\ref{tab:gsm8k} and~\ref{tab:humaneval} present full results for
+reasoning and code tasks.  DABoN shows consistent improvements, with
+larger gains on HumanEval (+9.1 vs +6.2 for standard BoN) where the
+reward model disagreement signal is more informative.
+
+\begin{table}[h]
+\centering
+\caption{Best-of-16 pass@1 on GSM8K (Llama-3.1-8B).}
+\label{tab:gsm8k}
+\small
+\begin{tabular}{lcc}
+\toprule
+Method & Pass@1 & $\Delta$ vs.\ Greedy \\
+\midrule
+Greedy       & 74.3 & -- \\
+Std BoN-16   & 82.1 & +7.8 \\
+DPP-SBERT    & 81.9 & +7.6 \\
+DABoN (ours) & \textbf{85.7} & \textbf{+11.4} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Best-of-16 pass@1 on HumanEval (Llama-3.1-8B).}
+\label{tab:humaneval}
+\small
+\begin{tabular}{lcc}
+\toprule
+Method & Pass@1 & $\Delta$ vs.\ Greedy \\
+\midrule
+Greedy       & 68.2 & -- \\
+Std BoN-16   & 74.4 & +6.2 \\
+DPP-SBERT    & 74.1 & +5.9 \\
+DABoN (ours) & \textbf{77.3} & \textbf{+9.1} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\end{document}

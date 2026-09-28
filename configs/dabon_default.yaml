@@ -1,0 +1,22 @@
+model: meta-llama/Llama-3.1-8B-Instruct
+reward_ensemble:
+  models: [armo, skywork, internlm]
+  device: cuda
+  dtype: bfloat16
+
+generation:
+  max_new_tokens: 512
+  use_vllm: true
+
+dabon:
+  budget: 16
+  pool_size: 128
+  beta: 1.0
+  adaptive_beta: true
+  top_k_candidates: 50
+
+tasks:
+  gsm8k:       {n_prompts: 1319, gold_scorer: exact_match}
+  math:        {n_prompts: 500,  gold_scorer: sympy}
+  arena_hard:  {n_prompts: 200,  gold_scorer: gpt4o_judge}
+  humaneval:   {n_prompts: 164,  gold_scorer: unit_test}

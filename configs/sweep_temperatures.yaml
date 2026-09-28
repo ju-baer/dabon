@@ -1,0 +1,7 @@
+base_model: meta-llama/Llama-3.1-8B-Instruct
+temperatures: [0.3, 0.6, 1.0, 1.5]
+top_p_values: [0.85, 0.95]
+dbs_strengths: [0.5, 2.0]
+k_per_strategy: 16
+tasks: [gsm8k, arena_hard, humaneval, creative_writing]
+n_prompts_per_task: 2000
