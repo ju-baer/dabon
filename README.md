@@ -1,7 +1,4 @@
 # Useful Diversity: A Predictive Geometry of Reward-Space Exploration for LLM Search
-
-
-
 ---
 
 ## One-Sentence Summary
@@ -31,10 +28,7 @@ GSM8K, MATH, HumanEval, and creative writing benchmarks.
 
 ```
 dabon/
-├── paper/
-│   ├── main.tex              # Full LaTeX paper (NeurIPS style)
-│   └── refs.bib              # Bibliography
-│
+|
 ├── src/
 │   ├── metrics/
 │   │   └── diversity.py      # APCD, MMD, Self-BLEU, RND (Eq. 2)
@@ -213,23 +207,6 @@ mean_scores, score_samples = model.score_with_uncertainty(prompts, outputs)
 # score_samples shape: (N, 10) — use as disagreement approximation
 ```
 
-
----
-
-## Publication Roadmap
-
-| Milestone | Target Date | Notes |
-|-----------|-------------|-------|
-| Smoke test passes | Week 1 | CPU-only validation |
-| Thrust II (synthetic) | Week 2 | No GPUs needed |
-| Thrust I audit (GSM8K + HumanEval) | Week 4 | 2×A100, ~200 GPU-h |
-| Thrust I distractor injection | Week 5 | 1×A100 |
-| Thrust III DABoN evaluation | Week 7 | 8×A100, ~1,200 GPU-h |
-| Ablation study | Week 8 | 2×A100, ~200 GPU-h |
-| First paper draft | Week 9 | |
-| Internal review | Week 10–11 | |
-| **NeurIPS 2026 submission** | **~May 2026** | Abstract: ~Jan 2026 |
-| ICLR 2027 (backup) | Oct 2026 | If NeurIPS rejected |
 
 ---
 
